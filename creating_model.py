@@ -6,6 +6,8 @@ engine = create_engine(
     'postgresql://robot-startml-ro:pheiph0hahj1Vaif@postgres.lab.karpov.courses:6432/startml')
 pd.set_option('display.max_columns', None)
 
+print(f'start sql-pulling')
+
 user_data = pd.read_sql(
     """ SELECT * FROM user_data""",
     con=engine
