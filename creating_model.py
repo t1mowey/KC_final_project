@@ -1,6 +1,7 @@
 import pandas as pd
 import time
 from sqlalchemy import create_engine
+start = time.time()
 
 engine = create_engine(
     'postgresql://robot-startml-ro:pheiph0hahj1Vaif@postgres.lab.karpov.courses:6432/startml')
@@ -12,6 +13,7 @@ user_data = pd.read_sql(
     """ SELECT * FROM user_data""",
     con=engine
 )
+print(f'start sql-pulling')
 post_text_df = pd.read_sql(
     """ SELECT * FROM t_prokhorenko_post_features_lesson_10_roberta""",
     con=engine
@@ -196,3 +198,5 @@ post_features = post_text_df.copy()
 user_features.to_sql('t_prokhorenko_user_features_lesson_22', con=engine, index=False,
                      if_exists='replace')  # записываем таблицу
 post_features.to_sql('t_prokhorenko_post_features_lesson_22', con=engine, index=False, if_exists='replace')
+
+print(f'time = {time.time() - start}')
