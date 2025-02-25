@@ -95,7 +95,7 @@ async def top_5_recommendations(id: int, time: datetime, limit: int = 10, db=Dep
     df = df[cols]
     X_val = df.drop(columns=['user_id', 'post_id'])
 
-    pool = Pool(data=X_val, cat_features=['topic', 'country', 'city', 'os','source'])
+    pool = Pool(data=X_val, cat_features=['topic'])
     predict = loaded_model.predict_proba(pool)[:, 1]
     df['predict'] = predict
     rec_ids = df.sort_values(by='predict', ascending=False).head(limit).post_id.to_list()

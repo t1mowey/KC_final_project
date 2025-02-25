@@ -10,27 +10,16 @@ pd.set_option('display.max_columns', None)
 print(f'start sql-pulling')
 
 user_data = pd.read_sql(
-    """ SELECT * FROM user_data""",
-    con=engine
+    """ SELECT * FROM t_prokhorenko_user_features_lesson_10_roberta""",
+    con = engine
 )
-print(f'start sql-pulling')
 post_text_df = pd.read_sql(
     """ SELECT * FROM t_prokhorenko_post_features_lesson_10_roberta""",
-    con=engine
+    con = engine
 )
 
-feed_action = pd.read_sql("""SELECT * FROM feed_data WHERE action = 'view' LIMIT 700000""", con=engine)
+feed_action = pd.read_sql("""SELECT * FROM feed_data WHERE action = 'view' LIMIT 700000""", con = engine)
 feed_action.drop(columns='action', inplace=True)
-
-like_probabilities = pd.read_sql("""
-    SELECT 
-    post_id,
-    AVG(target) AS like_probabilities
-    FROM feed_data
-    GROUP BY 
-        post_id
-""", con=engine)
-post_text_df = post_text_df.merge(like_probabilities, on='post_id', how='left')
 
 user_likes = pd.read_sql("""
     SELECT user_id, ARRAY_AGG(post_id) AS liked_posts 
@@ -41,14 +30,13 @@ user_likes = pd.read_sql("""
 
 post_likes = pd.read_sql("""
     SELECT 
-    post_id,
-    COALESCE(COUNT(CASE WHEN target = 1 THEN 1 END), 0) AS likes_count,
-    COALESCE(COUNT(CASE WHEN target = 0 THEN 1 END), 0) AS views_count
+    post_id, AVG(target) AS like_conversion
 FROM 
     feed_data
 GROUP BY 
     post_id;
 """, con=engine)
+post_likes
 post_text_df = post_text_df.merge(post_likes, on='post_id', how='left')
 
 user_like_chance = pd.read_sql("""
@@ -58,25 +46,17 @@ user_like_chance = pd.read_sql("""
 """, con=engine)
 user_data = user_data.merge(user_like_chance, on='user_id', how='left')
 
-print(f'complete sql-pulling')
-
 embedding_features = [f'emb_{i}' for i in range(768)]
 text_embeddings = post_text_df[embedding_features]
+
+user_data['os'] = user_data['os'].apply(lambda x: x == 'iOS').astype(int)
+user_data['source'] = user_data['source'].apply(lambda x: x == 'ads').astype(int)
+user_data.drop(columns=['country','city'], inplace=True)
 
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
-
-# # Добавление дополнительных текстовых метрик
-# post_text_df['text_length'] = post_text_df['text'].apply(len)
-# post_text_df['expression'] = post_text_df['text'].apply(lambda x: x.count('!'))
-# post_text_df['question'] = post_text_df['text'].apply(lambda x: x.count('?'))
-# post_text_df['tags'] = post_text_df['text'].apply(lambda x: x.count('#'))
-# post_text_df['links'] = post_text_df['text'].apply(lambda x: x.count('http'))
-# post_text_df['len_sen'] = post_text_df['text'].apply(
-#     lambda x: np.mean([len(i) for i in x.split('.') if i]) if '.' in x else len(x)
-# )
 
 post_text_df['max_emb'] = text_embeddings.max(axis=1)
 post_text_df['mean_emb'] = text_embeddings.mean(axis=1)
@@ -90,23 +70,21 @@ pca = PCA(n_components=20)
 pca_result = pca.fit_transform(text_embeddings_centered)
 
 # Преобразование результата PCA в DataFrame и сохранение исходных индексов
-pca_df = pd.DataFrame(data=pca_result, columns=[f'PCA_{i + 1}' for i in range(pca.n_components_)],
-                      index=post_text_df.index)
+pca_df = pd.DataFrame(data=pca_result, columns=[f'PCA_{i+1}' for i in range(pca.n_components_)], index=post_text_df.index)
 pca_features = pca_df.columns.to_list()
 
 # Объединение DataFrame
-post_text_df = pd.concat([post_text_df.drop(['text'] + text_embeddings.columns.to_list(), axis=1), pca_df],
-                         axis=1).fillna(0)
+post_text_df = pd.concat([post_text_df.drop(['text'] + text_embeddings.columns.to_list(), axis=1), pca_df], axis=1).fillna(0)
 
 # Кластеризация с использованием KMeans
-n_clusters = 2
+n_clusters=2
 kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(post_text_df[pca_features])
 
 # Добавление кластеров в DataFrame
 post_text_df['TextCluster'] = kmeans.labels_
 
 # Вычисление расстояний до кластеров
-dist_columns = [f"Distance_To_{i}th_Cluster" for i in range(1, n_clusters + 1)]
+dist_columns = [f"Distance_To_{i}th_Cluster" for i in range(1, n_clusters+1)]
 dists_df = pd.DataFrame(
     data=kmeans.transform(post_text_df[pca_features]),
     columns=dist_columns,
@@ -116,11 +94,11 @@ dists_df = pd.DataFrame(
 # Объединение расстояний до кластеров с основным DataFrame
 post_text_df = pd.concat([post_text_df, dists_df], axis=1)
 
-from sklearn.preprocessing import StandardScaler
 
+from sklearn.preprocessing import StandardScaler
 scaler = StandardScaler()
 
-user_for_scaling = ['gender', 'age', 'exp_group']
+user_for_scaling = user_data.drop(columns=['user_id']).columns.to_list()
 user_data[user_for_scaling] = scaler.fit_transform(user_data[user_for_scaling].astype(float))
 
 scaler = StandardScaler()
@@ -136,8 +114,15 @@ df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S').ap
 
 print(f'df is ready, start fitting')
 
+from sklearn.metrics import classification_report
+from sklearn.metrics import make_scorer, precision_score
+from sklearn.compose import ColumnTransformer
 from catboost import CatBoostClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, GroupKFold, train_test_split
+from sklearn.metrics import make_scorer, fbeta_score
+# from sklearn.preprocessing import
 
 X = df.drop(columns=['user_id', 'post_id', 'target'])  # Замените 'target' на имя вашей целевой переменной
 y = df['target']
@@ -157,8 +142,8 @@ gkf = GroupKFold(n_splits=4)
 cat = CatBoostClassifier(random_seed=42, auto_class_weights='Balanced')
 
 object_columns = [
-    'topic', 'country', 'city', 'os',
-    'source'
+    'topic'#, 'country', 'city', 'os',
+    #'source'
 ]
 
 # Сетка параметров
@@ -170,6 +155,7 @@ param_grid = {
     'l2_leaf_reg': [0],
     'cat_features': [object_columns]
 }
+
 
 # GridSearchCV с использованием GroupKFold
 search = GridSearchCV(cat, param_grid, cv=gkf.split(X_train, y_train, train_groups), scoring='roc_auc', verbose=0)
