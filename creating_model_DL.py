@@ -1,6 +1,11 @@
 import pandas as pd
 import time
 from sqlalchemy import create_engine
+from catboost import CatBoostClassifier
+from sklearn.model_selection import GridSearchCV, GroupKFold, train_test_split
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+
 start = time.time()
 
 engine = create_engine(
@@ -18,7 +23,9 @@ post_text_df = pd.read_sql(
     con = engine
 )
 
-feed_action = pd.read_sql("""SELECT * FROM feed_data WHERE action = 'view' LIMIT 700000""", con = engine)
+feed_action = pd.read_sql(
+    """SELECT * FROM feed_data WHERE action = 'view' LIMIT 700000""",
+    con = engine)
 feed_action.drop(columns='action', inplace=True)
 
 user_likes = pd.read_sql("""
@@ -30,21 +37,20 @@ user_likes = pd.read_sql("""
 
 post_likes = pd.read_sql("""
     SELECT 
-    post_id, AVG(target) AS like_conversion
+    post_id, AVG(target) AS conversion
 FROM 
     feed_data
 GROUP BY 
     post_id;
 """, con=engine)
-post_likes
 post_text_df = post_text_df.merge(post_likes, on='post_id', how='left')
 
-user_like_chance = pd.read_sql("""
-    SELECT user_id, AVG(target) AS user_like_chance
+ctr = pd.read_sql("""
+    SELECT user_id, AVG(target) AS ctr
     FROM feed_data 
     GROUP BY user_id
 """, con=engine)
-user_data = user_data.merge(user_like_chance, on='user_id', how='left')
+user_data = user_data.merge(ctr, on='user_id', how='left')
 
 embedding_features = [f'emb_{i}' for i in range(768)]
 text_embeddings = post_text_df[embedding_features]
@@ -52,11 +58,6 @@ text_embeddings = post_text_df[embedding_features]
 user_data['os'] = user_data['os'].apply(lambda x: x == 'iOS').astype(int)
 user_data['source'] = user_data['source'].apply(lambda x: x == 'ads').astype(int)
 user_data.drop(columns=['country','city'], inplace=True)
-
-import numpy as np
-import pandas as pd
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
 
 post_text_df['max_emb'] = text_embeddings.max(axis=1)
 post_text_df['mean_emb'] = text_embeddings.mean(axis=1)
@@ -114,15 +115,6 @@ df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S').ap
 
 print(f'df is ready, start fitting')
 
-from sklearn.metrics import classification_report
-from sklearn.metrics import make_scorer, precision_score
-from sklearn.compose import ColumnTransformer
-from catboost import CatBoostClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV, GroupKFold, train_test_split
-from sklearn.metrics import make_scorer, fbeta_score
-# from sklearn.preprocessing import
 
 X = df.drop(columns=['user_id', 'post_id', 'target'])  # Замените 'target' на имя вашей целевой переменной
 y = df['target']
@@ -166,14 +158,8 @@ print(search.best_params_)
 print(search.best_score_)
 model = search.best_estimator_
 
-model.save_model('catboost_model',
+model.save_model('catboost_model_DL',
                  format="cbm")
-
-from_file = CatBoostClassifier()  # здесь не указываем параметры, которые были при обучении, в дампе модели все есть
-
-from_file.load_model("catboost_model")
-
-from_file.predict(X_test)
 
 print(f'model saved, start sql-pushing')
 
@@ -181,8 +167,11 @@ user_features = user_data.merge(user_likes, on='user_id', how='left')
 
 post_features = post_text_df.copy()
 
-user_features.to_sql('t_prokhorenko_user_features_lesson_22', con=engine, index=False,
-                     if_exists='replace')  # записываем таблицу
-post_features.to_sql('t_prokhorenko_post_features_lesson_22', con=engine, index=False, if_exists='replace')
+engine = create_engine(
+    'postgresql://robot-startml-ro:pheiph0hahj1Vaif@postgres.lab.karpov.courses:6432/startml')
+
+user_features.to_sql('t_prokhorenko_user_features_lesson_22_DL', con=engine, index=False, if_exists='replace')
+
+post_features.to_sql('t_prokhorenko_post_features_lesson_22_DL', con=engine, index=False, if_exists='replace')
 
 print(f'time = {time.time() - start}')
